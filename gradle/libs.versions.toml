@@ -1,12 +1,6 @@
 
-
-[plugins]
-android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-
-
 [versions]
-agp = "8.6.0"
+agp = "8.3.1"
 kotlin = "1.9.22"
 coreKtx = "1.16.0"
 junit = "4.13.2"
@@ -45,5 +39,6 @@ compose-activity = { group = "androidx.activity", name = "activity-compose", ver
 coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
-
-
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
