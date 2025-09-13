@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
                         headlineContent = { Text(movie.title) },
                         supportingContent = { movie.url?.let { Text(it) } }
                     )
-                    Divider()
+                    HorizontalDivider()
                 }
             }
         }
