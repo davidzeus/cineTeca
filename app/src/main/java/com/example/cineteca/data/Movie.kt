@@ -8,5 +8,6 @@ data class Movie(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val title: String,
     val url: String? = null,
-    val addedAt: Long = System.currentTimeMillis()
+    val addedAt: Long = System.currentTimeMillis(),
+    val isWatched: Boolean = false
 )
