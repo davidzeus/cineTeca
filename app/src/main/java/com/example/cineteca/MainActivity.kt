@@ -1,9 +1,13 @@
 package com.example.cineteca
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -43,7 +48,22 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun MovieListScreen() {
         val context = this
+        val localContext = LocalContext.current
         var movies by remember { mutableStateOf(listOf<Movie>()) }
+        
+        fun openUrl(url: String) {
+            try {
+                val uri = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    "https://$url"
+                } else {
+                    url
+                }
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                localContext.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(localContext, "No se pudo abrir el enlace", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         LaunchedEffect(Unit) {
             val db = AppDatabase.getDatabase(context)
@@ -115,7 +135,10 @@ class MainActivity : ComponentActivity() {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp)),
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { 
+                                    movie.url?.let { url -> openUrl(url) } 
+                                },
                             colors = CardDefaults.cardColors(
                                 containerColor = Color(0xFF2A2A2A)
                             ),
@@ -135,15 +158,29 @@ class MainActivity : ComponentActivity() {
                                     Text(
                                         text = url,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF4F8EF7)
+                                        color = Color(0xFF4F8EF7),
+                                        modifier = Modifier.clickable { openUrl(url) }
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Agregada ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(movie.addedAt))}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Agregada ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(movie.addedAt))}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                    if (movie.url != null) {
+                                        Text(
+                                            text = "👆 Toca para abrir",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF4F8EF7)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
