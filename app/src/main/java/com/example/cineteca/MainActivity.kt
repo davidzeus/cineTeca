@@ -12,14 +12,22 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
 import com.example.cineteca.data.AppDatabase
 import com.example.cineteca.data.Movie
@@ -49,7 +57,10 @@ class MainActivity : ComponentActivity() {
     fun MovieListScreen() {
         val context = this
         val localContext = LocalContext.current
+        val coroutineScope = rememberCoroutineScope()
         var movies by remember { mutableStateOf(listOf<Movie>()) }
+        var editingMovieId by remember { mutableStateOf<Int?>(null) }
+        var tempTitle by remember { mutableStateOf("") }
         
         fun openUrl(url: String) {
             try {
@@ -62,6 +73,17 @@ class MainActivity : ComponentActivity() {
                 localContext.startActivity(intent)
             } catch (e: Exception) {
                 Toast.makeText(localContext, "No se pudo abrir el enlace", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
+        fun updateMovieTitle(movieId: Int, newTitle: String) {
+            coroutineScope.launch {
+                val db = AppDatabase.getDatabase(context)
+                val updatedMovie = movies.find { it.id == movieId }?.copy(title = newTitle)
+                updatedMovie?.let { 
+                    db.movieDao().update(it)
+                    Toast.makeText(localContext, "Título actualizado", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -147,12 +169,67 @@ class MainActivity : ComponentActivity() {
                             Column(
                                 modifier = Modifier.padding(16.dp)
                             ) {
-                                Text(
-                                    text = movie.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (editingMovieId == movie.id) {
+                                        BasicTextField(
+                                            value = tempTitle,
+                                            onValueChange = { tempTitle = it },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .background(
+                                                    Color(0xFF3A3A3A),
+                                                    RoundedCornerShape(4.dp)
+                                                )
+                                                .padding(8.dp),
+                                            textStyle = TextStyle(
+                                                color = Color.White,
+                                                fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                                                fontWeight = FontWeight.SemiBold
+                                            ),
+                                            cursorBrush = SolidColor(Color.White),
+                                            singleLine = true
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        IconButton(
+                                            onClick = {
+                                                if (tempTitle.isNotBlank()) {
+                                                    updateMovieTitle(movie.id, tempTitle)
+                                                    editingMovieId = null
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = "Guardar",
+                                                tint = Color(0xFF4F8EF7)
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            text = movie.title,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                editingMovieId = movie.id
+                                                tempTitle = movie.title
+                                            }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = "Editar título",
+                                                tint = Color.Gray
+                                            )
+                                        }
+                                    }
+                                }
                                 movie.url?.let { url ->
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
