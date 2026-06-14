@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
@@ -23,25 +24,22 @@ object MetadataFetcher {
         PlatformDetector.extractYouTubeId(url)?.let { videoId ->
             val thumbnail = "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
             val title = fetchYouTubeTitle(url)
-            if (title != null || thumbnail.isNotEmpty()) {
-                return@withContext Metadata(
-                    title = title,
-                    thumbnailUrl = thumbnail,
-                    platform = platform
-                )
-            }
+            return@withContext Metadata(
+                title = title,
+                thumbnailUrl = thumbnail,
+                platform = platform
+            )
         }
 
-        // 2. Open Graph scraping (funciona para Netflix, IMDb, Letterboxd, etc.)
+        // 2. Open Graph scraping (Netflix, IMDb, Letterboxd, Instagram, etc.)
         val og = scrapeOpenGraph(url)
         val merged = og.copy(platform = platform)
 
-        // 3. Si tenemos título pero no imagen/descripción → Wikipedia fallback
-        val titleForSearch = merged.title
-        if (titleForSearch != null && (merged.thumbnailUrl == null || merged.description == null)) {
-            val wiki = searchWikipedia(titleForSearch)
+        // 3. Si tenemos título pero no imagen → Wikipedia fallback
+        if (merged.title != null && merged.thumbnailUrl == null) {
+            val wiki = searchWikipedia(merged.title)
             return@withContext merged.copy(
-                thumbnailUrl = merged.thumbnailUrl ?: wiki.thumbnailUrl,
+                thumbnailUrl = wiki.thumbnailUrl,
                 description = merged.description ?: wiki.description
             )
         }
@@ -52,23 +50,24 @@ object MetadataFetcher {
     // YouTube oEmbed — sin API key
     private fun fetchYouTubeTitle(url: String): String? = runCatching {
         val encoded = URLEncoder.encode(url, "UTF-8")
-        val response = URL("https://www.youtube.com/oembed?url=$encoded&format=json")
-            .openConnection()
-            .apply {
-                setRequestProperty("User-Agent", "Mozilla/5.0")
-                connectTimeout = 6000
-                readTimeout = 6000
-            }
-            .getInputStream()
-            .bufferedReader()
-            .readText()
-        JSONObject(response).optString("title").takeIf { it.isNotEmpty() }
+        val conn = URL("https://www.youtube.com/oembed?url=$encoded&format=json")
+            .openConnection() as HttpURLConnection
+        conn.apply {
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "Mozilla/5.0")
+            connectTimeout = 7000
+            readTimeout = 7000
+        }
+        if (conn.responseCode != 200) return@runCatching null
+        JSONObject(conn.inputStream.bufferedReader().readText()).optString("title")
+            .takeIf { it.isNotBlank() }
     }.getOrNull()
 
     // Open Graph scraping genérico
     private fun scrapeOpenGraph(url: String): Metadata = runCatching {
         val doc = Jsoup.connect(url)
-            .userAgent("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36")
+            .userAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+            .header("Accept-Language", "es-ES,es;q=0.9")
             .timeout(8000)
             .followRedirects(true)
             .get()
@@ -78,50 +77,45 @@ object MetadataFetcher {
                 ?: doc.select("meta[name=$prop]").attr("content").takeIf { it.isNotEmpty() }
         }
 
-        val title = meta("og:title", "twitter:title") ?: doc.title().takeIf { it.isNotEmpty() }
+        val title = meta("og:title", "twitter:title")
+            ?: doc.title().removePrefix("Instagram").trim().takeIf { it.isNotEmpty() }
         val description = meta("og:description", "twitter:description", "description")
             ?.take(300)
-        val image = meta("og:image", "twitter:image")
+        val image = meta("og:image", "twitter:image:src", "twitter:image")
 
         Metadata(title = title, description = description, thumbnailUrl = image)
     }.getOrElse { Metadata() }
 
-    // Wikipedia REST API — completamente gratuita, sin clave
+    // Wikipedia REST API — gratuita, sin clave
     private fun searchWikipedia(query: String): Metadata = runCatching {
-        // Primero buscamos el artículo
         val searchEncoded = URLEncoder.encode(query, "UTF-8")
-        val searchResponse = URL("https://en.wikipedia.org/w/api.php?action=opensearch&search=$searchEncoded&limit=1&format=json")
-            .openConnection()
-            .apply {
-                setRequestProperty("User-Agent", "CineTeca/1.0")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-            .getInputStream()
-            .bufferedReader()
-            .readText()
+        val searchConn = URL("https://en.wikipedia.org/w/api.php?action=opensearch&search=$searchEncoded&limit=1&format=json")
+            .openConnection() as HttpURLConnection
+        searchConn.apply {
+            setRequestProperty("User-Agent", "CineTeca/1.0")
+            connectTimeout = 5000
+            readTimeout = 5000
+        }
+        if (searchConn.responseCode != 200) return@runCatching Metadata()
 
-        val searchJson = org.json.JSONArray(searchResponse)
+        val searchJson = org.json.JSONArray(searchConn.inputStream.bufferedReader().readText())
         val titles = searchJson.optJSONArray(1) ?: return@runCatching Metadata()
         if (titles.length() == 0) return@runCatching Metadata()
+
         val articleTitle = URLEncoder.encode(titles.getString(0), "UTF-8")
+        val summaryConn = URL("https://en.wikipedia.org/api/rest_v1/page/summary/$articleTitle")
+            .openConnection() as HttpURLConnection
+        summaryConn.apply {
+            setRequestProperty("User-Agent", "CineTeca/1.0")
+            connectTimeout = 5000
+            readTimeout = 5000
+        }
+        if (summaryConn.responseCode != 200) return@runCatching Metadata()
 
-        // Luego traemos el resumen con imagen
-        val summaryResponse = URL("https://en.wikipedia.org/api/rest_v1/page/summary/$articleTitle")
-            .openConnection()
-            .apply {
-                setRequestProperty("User-Agent", "CineTeca/1.0")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-            .getInputStream()
-            .bufferedReader()
-            .readText()
-
-        val summary = JSONObject(summaryResponse)
-        val extract = summary.optString("extract").takeIf { it.isNotEmpty() }?.take(300)
-        val thumbnail = summary.optJSONObject("thumbnail")?.optString("source")
-
-        Metadata(description = extract, thumbnailUrl = thumbnail)
+        val summary = JSONObject(summaryConn.inputStream.bufferedReader().readText())
+        Metadata(
+            description = summary.optString("extract").takeIf { it.isNotBlank() }?.take(300),
+            thumbnailUrl = summary.optJSONObject("thumbnail")?.optString("source")
+        )
     }.getOrElse { Metadata() }
 }
