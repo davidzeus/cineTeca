@@ -17,6 +17,8 @@ composeRuntime = "1.5.4"
 coroutines = "1.7.3"
 ksp = "1.0.14"
 playServicesAuth = "21.2.0"
+jsoup = "1.17.2"
+coil = "2.5.0"
 
 
 [libraries]
@@ -41,6 +43,8 @@ coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

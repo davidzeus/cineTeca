@@ -13,9 +13,12 @@ interface MovieDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(movie: Movie)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAndGetId(movie: Movie): Long
+
     @Update
     suspend fun update(movie: Movie)
-    
+
     @Delete
     suspend fun delete(movie: Movie)
 

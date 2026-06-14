@@ -6,9 +6,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,15 +25,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.cineteca.data.AppDatabase
 import com.example.cineteca.data.Movie
 import com.example.cineteca.ui.theme.CineTecaTheme
+import com.example.cineteca.utils.PlatformDetector
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -169,20 +170,14 @@ fun MovieListScreen() {
                                 val (bgColor, icon, label, align) = when (swipeState.dismissDirection) {
                                     SwipeToDismissBoxValue.EndToStart -> Quad(
                                         MaterialTheme.colorScheme.errorContainer,
-                                        Icons.Default.Delete,
-                                        "Eliminar",
-                                        Alignment.CenterEnd
+                                        Icons.Default.Delete, "Eliminar", Alignment.CenterEnd
                                     )
                                     SwipeToDismissBoxValue.StartToEnd -> if (movie.isWatched) Quad(
                                         MaterialTheme.colorScheme.secondaryContainer,
-                                        Icons.Default.Close,
-                                        "No vista",
-                                        Alignment.CenterStart
+                                        Icons.Default.Close, "No vista", Alignment.CenterStart
                                     ) else Quad(
                                         MaterialTheme.colorScheme.tertiaryContainer,
-                                        Icons.Default.Check,
-                                        "Vista",
-                                        Alignment.CenterStart
+                                        Icons.Default.Check, "Vista", Alignment.CenterStart
                                     )
                                     else -> Quad(Color.Transparent, null, "", Alignment.Center)
                                 }
@@ -199,11 +194,8 @@ fun MovieListScreen() {
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                             Icon(icon, label, tint = MaterialTheme.colorScheme.onSurface)
-                                            Text(
-                                                label,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
+                                            Text(label, fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface)
                                         }
                                     }
                                 }
@@ -254,6 +246,9 @@ private fun MovieCard(
     onToggleWatched: () -> Unit,
     onOpenUrl: () -> Unit
 ) {
+    val context = LocalContext.current
+    val platformColor = movie.platform?.let { PlatformDetector.colorFor(it) }
+
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -269,30 +264,48 @@ private fun MovieCard(
             defaultElevation = if (movie.isWatched) 1.dp else 3.dp
         )
     ) {
+        // Thumbnail en la parte superior si existe
+        if (movie.thumbnailUrl != null && !isEditing) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(movie.thumbnailUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = movie.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            )
+        }
+
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = if (movie.isWatched)
-                        MaterialTheme.colorScheme.tertiaryContainer
-                    else
-                        MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        if (movie.isWatched) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "Vista",
-                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        } else {
-                            Text("🎬", fontSize = 16.sp)
+                // Badge de estado (solo si no hay thumbnail)
+                if (movie.thumbnailUrl == null) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (movie.isWatched)
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        else
+                            MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (movie.isWatched) {
+                                Icon(
+                                    Icons.Default.Check, "Vista",
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                Text("🎬", fontSize = 16.sp)
+                            }
                         }
                     }
                 }
@@ -326,15 +339,16 @@ private fun MovieCard(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-                        movie.url?.let { url ->
+
+                        // Descripción
+                        if (movie.description != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = url,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.clickable { onOpenUrl() }
+                                text = movie.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -343,8 +357,7 @@ private fun MovieCard(
                 if (!isEditing) {
                     IconButton(onClick = onStartEdit, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            Icons.Default.Edit,
-                            "Editar",
+                            Icons.Default.Edit, "Editar",
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -359,12 +372,36 @@ private fun MovieCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-                            .format(Date(movie.addedAt)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Badge de plataforma
+                        if (movie.platform != null) {
+                            val badgeColor = platformColor?.let { Color(it) }
+                                ?: MaterialTheme.colorScheme.secondaryContainer
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = badgeColor.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = movie.platform,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = badgeColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+                                .format(Date(movie.addedAt)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+
                     AssistChip(
                         onClick = onToggleWatched,
                         label = {
@@ -376,8 +413,7 @@ private fun MovieCard(
                         leadingIcon = {
                             Icon(
                                 if (movie.isWatched) Icons.Default.Refresh else Icons.Default.Check,
-                                null,
-                                modifier = Modifier.size(14.dp)
+                                null, modifier = Modifier.size(14.dp)
                             )
                         }
                     )
@@ -391,18 +427,15 @@ private fun MovieCard(
 private fun EmptyState(filter: MovieFilter, modifier: Modifier = Modifier) {
     val (emoji, title, subtitle) = when (filter) {
         MovieFilter.ALL -> Triple(
-            "🎬",
-            "No hay nada guardado",
+            "🎬", "No hay nada guardado",
             "Comparte un enlace desde Instagram, YouTube u otra app y aparecerá aquí"
         )
         MovieFilter.UNWATCHED -> Triple(
-            "✅",
-            "¡Todo visto!",
+            "✅", "¡Todo visto!",
             "No tienes películas pendientes por ver"
         )
         MovieFilter.WATCHED -> Triple(
-            "🍿",
-            "Nada marcado como visto",
+            "🍿", "Nada marcado como visto",
             "Desliza a la derecha una película para marcarla como vista"
         )
     }
@@ -414,15 +447,13 @@ private fun EmptyState(filter: MovieFilter, modifier: Modifier = Modifier) {
             Text(emoji, style = MaterialTheme.typography.displayLarge)
             Spacer(Modifier.height(16.dp))
             Text(
-                title,
-                style = MaterialTheme.typography.headlineSmall,
+                title, style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                subtitle,
-                style = MaterialTheme.typography.bodyMedium,
+                subtitle, style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
