@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.cineteca.data.AppDatabase
 import com.example.cineteca.data.Movie
+import com.example.cineteca.utils.MetadataFetcher
+import com.example.cineteca.utils.PlatformDetector
 import kotlinx.coroutines.launch
 
 class ShareReceiverActivity : ComponentActivity() {
@@ -16,27 +18,42 @@ class ShareReceiverActivity : ComponentActivity() {
     }
 
     private fun handleShareIntent() {
-        val intent = intent
-        if (intent?.action == Intent.ACTION_SEND) {
-            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-            if (!sharedText.isNullOrBlank()) {
-                saveMovie(sharedText)
-            } else {
-                Toast.makeText(this, "No se recibió texto para guardar", Toast.LENGTH_SHORT).show()
-                finish()
-            }
-        } else {
-            finish()
-        }
-    }
+        val sharedText = intent?.takeIf { it.action == Intent.ACTION_SEND }
+            ?.getStringExtra(Intent.EXTRA_TEXT)
 
-    private fun saveMovie(text: String) {
-        val movie = Movie(title = text, url = text)
-        val db = AppDatabase.getDatabase(this)
-        lifecycleScope.launch {
-            db.movieDao().insert(movie)
-            Toast.makeText(this@ShareReceiverActivity, "Película guardada", Toast.LENGTH_SHORT).show()
+        if (sharedText.isNullOrBlank()) {
+            Toast.makeText(this, "No se recibió texto para guardar", Toast.LENGTH_SHORT).show()
             finish()
+            return
+        }
+
+        lifecycleScope.launch {
+            val db = AppDatabase.getDatabase(this@ShareReceiverActivity)
+
+            // Guarda inmediatamente con la URL como título
+            val isUrl = sharedText.startsWith("http://") || sharedText.startsWith("https://")
+            val initialMovie = Movie(
+                title = sharedText,
+                url = if (isUrl) sharedText else null,
+                platform = if (isUrl) PlatformDetector.detect(sharedText)?.name else null
+            )
+            val rowId = db.movieDao().insertAndGetId(initialMovie)
+
+            Toast.makeText(this@ShareReceiverActivity, "Guardado, obteniendo info...", Toast.LENGTH_SHORT).show()
+            finish()
+
+            // En background: busca metadata y actualiza el registro
+            if (isUrl && rowId > 0) {
+                val meta = MetadataFetcher.fetch(sharedText)
+                val updated = initialMovie.copy(
+                    id = rowId.toInt(),
+                    title = meta.title ?: sharedText,
+                    thumbnailUrl = meta.thumbnailUrl,
+                    description = meta.description,
+                    platform = meta.platform ?: initialMovie.platform
+                )
+                db.movieDao().update(updated)
+            }
         }
     }
 }

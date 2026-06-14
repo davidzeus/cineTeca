@@ -64,6 +64,10 @@ dependencies {
     // Material Icons Extended
     implementation(libs.compose.material.icons.extended)
 
+    // Metadata fetching
+    implementation(libs.jsoup)
+    implementation(libs.coil.compose)
+
     // Jetpack Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

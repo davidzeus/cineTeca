@@ -9,5 +9,8 @@ data class Movie(
     val title: String,
     val url: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
-    val isWatched: Boolean = false
+    val isWatched: Boolean = false,
+    val thumbnailUrl: String? = null,
+    val description: String? = null,
+    val platform: String? = null
 )
