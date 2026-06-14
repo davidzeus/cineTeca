@@ -16,6 +16,7 @@ composeUi = "1.5.4"
 composeRuntime = "1.5.4"
 coroutines = "1.7.3"
 ksp = "1.0.14"
+playServicesAuth = "21.2.0"
 
 
 [libraries]
@@ -38,6 +39,8 @@ compose-runtime = { group = "androidx.compose.runtime", name = "runtime", versio
 compose-activity = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
 coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,24 +1,27 @@
 package com.example.cineteca
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -28,415 +31,580 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
+import com.example.cineteca.auth.GoogleDriveManager
 import com.example.cineteca.data.AppDatabase
 import com.example.cineteca.data.Movie
+import com.example.cineteca.ui.LoginScreen
+import com.example.cineteca.ui.theme.CineTecaTheme
+import com.google.android.gms.auth.api.signin.GoogleSignIn
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var driveManager: GoogleDriveManager
+    private lateinit var signInLauncher: ActivityResultLauncher<Intent>
+
+    // null = show login, true = signed in with Google, false = local only
+    private val authState = mutableStateOf<Boolean?>(null)
+
+    private val prefs by lazy { getSharedPreferences("cineteca_prefs", Context.MODE_PRIVATE) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        driveManager = GoogleDriveManager(this)
+
+        authState.value = when {
+            driveManager.isSignedIn() -> true
+            prefs.getBoolean("skip_login", false) -> false
+            else -> null
+        }
+
+        signInLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            try {
+                GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                    .getResult(com.google.android.gms.common.api.ApiException::class.java)
+                authState.value = true
+            } catch (e: Exception) {
+                Toast.makeText(this, "Error al iniciar sesión con Google", Toast.LENGTH_LONG).show()
+            }
+        }
+
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    background = Color(0xFF121212),
-                    surface = Color(0xFF1E1E1E),
-                    primary = Color(0xFF4F8EF7),
-                    onBackground = Color.White,
-                    onSurface = Color.White
-                )
-            ) {
-                MovieListScreen()
+            CineTecaTheme {
+                val auth by authState
+                var isSigningIn by remember { mutableStateOf(false) }
+
+                when (auth) {
+                    null -> LoginScreen(
+                        isLoading = isSigningIn,
+                        onSignIn = {
+                            isSigningIn = true
+                            signInLauncher.launch(driveManager.getSignInIntent())
+                        },
+                        onContinueLocal = {
+                            prefs.edit().putBoolean("skip_login", true).apply()
+                            authState.value = false
+                        }
+                    )
+                    else -> MovieListScreen(
+                        isGoogleConnected = auth == true,
+                        driveManager = if (auth == true) driveManager else null,
+                        onSignOut = {
+                            lifecycleScope.launch {
+                                driveManager.signOut()
+                                prefs.edit().putBoolean("skip_login", false).apply()
+                                authState.value = null
+                            }
+                        },
+                        onConnectGoogle = {
+                            signInLauncher.launch(driveManager.getSignInIntent())
+                        }
+                    )
+                }
+
+                LaunchedEffect(auth) {
+                    if (auth != null) isSigningIn = false
+                }
             }
         }
     }
+}
 
-    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-    @Composable
-    fun MovieListScreen() {
-        val context = this
-        val localContext = LocalContext.current
-        val coroutineScope = rememberCoroutineScope()
-        var movies by remember { mutableStateOf(listOf<Movie>()) }
-        var editingMovieId by remember { mutableStateOf<Int?>(null) }
-        var tempTitle by remember { mutableStateOf("") }
-        
-        fun openUrl(url: String) {
-            try {
-                val uri = if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    "https://$url"
-                } else {
-                    url
-                }
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                localContext.startActivity(intent)
-            } catch (e: Exception) {
-                Toast.makeText(localContext, "No se pudo abrir el enlace", Toast.LENGTH_SHORT).show()
-            }
-        }
-        
-        fun toggleWatched(movie: Movie) {
-            coroutineScope.launch {
-                val movieDao = AppDatabase.getDatabase(context).movieDao()
-                val updatedMovie = movie.copy(isWatched = !movie.isWatched)
-                movieDao.update(updatedMovie)
-            }
-        }
-        
-        fun deleteMovie(movie: Movie) {
-            coroutineScope.launch {
-                val movieDao = AppDatabase.getDatabase(context).movieDao()
-                movieDao.delete(movie)
-            }
-        }
-        
-        fun updateMovieTitle(movieId: Int, newTitle: String) {
-            coroutineScope.launch {
-                val db = AppDatabase.getDatabase(context)
-                val updatedMovie = movies.find { it.id == movieId }?.copy(title = newTitle)
-                updatedMovie?.let { 
-                    db.movieDao().update(it)
-                    Toast.makeText(localContext, "Título actualizado", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+enum class MovieFilter { ALL, UNWATCHED, WATCHED }
 
-        LaunchedEffect(Unit) {
-            val db = AppDatabase.getDatabase(context)
-            db.movieDao().getAllMovies().collectLatest {
-                movies = it
-            }
-        }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MovieListScreen(
+    isGoogleConnected: Boolean,
+    driveManager: GoogleDriveManager?,
+    onSignOut: () -> Unit,
+    onConnectGoogle: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val db = remember { AppDatabase.getDatabase(context) }
 
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { 
+    var movies by remember { mutableStateOf(listOf<Movie>()) }
+    var activeFilter by remember { mutableStateOf(MovieFilter.ALL) }
+    var showMenu by remember { mutableStateOf(false) }
+    var isBusy by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<Int?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+
+    val account = driveManager?.getCurrentAccount()
+
+    LaunchedEffect(Unit) {
+        db.movieDao().getAllMovies().collectLatest { movies = it }
+    }
+
+    val filtered = remember(movies, activeFilter) {
+        when (activeFilter) {
+            MovieFilter.ALL -> movies
+            MovieFilter.UNWATCHED -> movies.filter { !it.isWatched }
+            MovieFilter.WATCHED -> movies.filter { it.isWatched }
+        }
+    }
+
+    fun openUrl(url: String) {
+        try {
+            val uri = Uri.parse(if (!url.startsWith("http")) "https://$url" else url)
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (e: Exception) {
+            Toast.makeText(context, "No se pudo abrir el enlace", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
                         Text(
-                            "🎬 CineTeca",
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        ) 
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color(0xFF1E1E1E)
-                    )
-                )
-            },
-            containerColor = Color(0xFF121212)
-        ) { padding ->
-            if (movies.isEmpty()) {
-                // Estado vacío
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .padding(32.dp),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            "🍿",
-                            style = MaterialTheme.typography.displayLarge
+                            "CineTeca",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "No hay películas guardadas",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Comparte enlaces desde otras apps para agregarlas a tu lista",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.Gray,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        if (account != null) {
+                            Text(
+                                account.email ?: "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                actions = {
+                    AnimatedVisibility(visible = isBusy, enter = fadeIn(), exit = fadeOut()) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .padding(8.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
+                    Box {
+                        if (account != null) {
+                            val initial = (account.displayName ?: account.email ?: "U")
+                                .take(1).uppercase()
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primaryContainer)
+                                    .clickable { showMenu = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    initial,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(Icons.Default.MoreVert, "Opciones")
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            if (isGoogleConnected && driveManager != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Guardar en Drive") },
+                                    leadingIcon = { Icon(Icons.Default.CloudUpload, null) },
+                                    onClick = {
+                                        showMenu = false
+                                        isBusy = true
+                                        scope.launch {
+                                            val r = driveManager.backupToDrive(movies)
+                                            isBusy = false
+                                            Toast.makeText(
+                                                context,
+                                                if (r.isSuccess) "✓ Backup guardado en Drive"
+                                                else "Error: ${r.exceptionOrNull()?.message}",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Restaurar desde Drive") },
+                                    leadingIcon = { Icon(Icons.Default.CloudDownload, null) },
+                                    onClick = {
+                                        showMenu = false
+                                        isBusy = true
+                                        scope.launch {
+                                            val r = driveManager.restoreFromDrive()
+                                            isBusy = false
+                                            if (r.isSuccess) {
+                                                r.getOrNull()?.forEach { db.movieDao().insert(it) }
+                                                Toast.makeText(context, "✓ Lista restaurada desde Drive", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Error: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Cerrar sesión") },
+                                    leadingIcon = { Icon(Icons.Default.ExitToApp, null) },
+                                    onClick = { showMenu = false; onSignOut() }
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text("Conectar con Google Drive") },
+                                    leadingIcon = { Icon(Icons.Default.AccountCircle, null) },
+                                    onClick = { showMenu = false; onConnectGoogle() }
+                                )
+                            }
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Filter chips
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    FilterChip(
+                        selected = activeFilter == MovieFilter.ALL,
+                        onClick = { activeFilter = MovieFilter.ALL },
+                        label = { Text("Todas (${movies.size})") }
+                    )
                 }
+                item {
+                    FilterChip(
+                        selected = activeFilter == MovieFilter.UNWATCHED,
+                        onClick = { activeFilter = MovieFilter.UNWATCHED },
+                        label = { Text("Por ver (${movies.count { !it.isWatched }})") }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = activeFilter == MovieFilter.WATCHED,
+                        onClick = { activeFilter = MovieFilter.WATCHED },
+                        label = { Text("Vistas (${movies.count { it.isWatched }})") }
+                    )
+                }
+            }
+
+            if (filtered.isEmpty()) {
+                EmptyState(activeFilter, Modifier.fillMaxSize())
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(
-                        top = padding.calculateTopPadding() + 8.dp,
-                        bottom = padding.calculateBottomPadding() + 8.dp,
-                        start = 16.dp,
-                        end = 16.dp
-                    ),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(movies) { movie ->
-                        var showMenu by remember { mutableStateOf(false) }
+                    items(filtered, key = { it.id }) { movie ->
                         val swipeState = rememberSwipeToDismissBoxState(
-                            confirmValueChange = { dismissValue ->
-                                when (dismissValue) {
+                            confirmValueChange = { value ->
+                                when (value) {
                                     SwipeToDismissBoxValue.EndToStart -> {
-                                        // Deslizar hacia la izquierda -> Eliminar
-                                        deleteMovie(movie)
+                                        scope.launch { db.movieDao().delete(movie) }
                                         true
                                     }
                                     SwipeToDismissBoxValue.StartToEnd -> {
-                                        // Deslizar hacia la derecha -> Marcar como visto
-                                        toggleWatched(movie)
-                                        false // No eliminar de la lista, solo cambiar estado
+                                        scope.launch {
+                                            db.movieDao().update(movie.copy(isWatched = !movie.isWatched))
+                                        }
+                                        false
                                     }
                                     else -> false
                                 }
                             }
                         )
-                        
+
                         SwipeToDismissBox(
                             state = swipeState,
-                            backgroundContent = { 
-                                val color = when (swipeState.dismissDirection) {
-                                    SwipeToDismissBoxValue.EndToStart -> Color.Red // Eliminar
-                                    SwipeToDismissBoxValue.StartToEnd -> if (movie.isWatched) Color(0xFFFF6B35) else Color.Green // Toggle visto
-                                    else -> Color.Transparent
+                            backgroundContent = {
+                                val (bgColor, icon, label, align) = when (swipeState.dismissDirection) {
+                                    SwipeToDismissBoxValue.EndToStart -> Quad(
+                                        MaterialTheme.colorScheme.errorContainer,
+                                        Icons.Default.Delete,
+                                        "Eliminar",
+                                        Alignment.CenterEnd
+                                    )
+                                    SwipeToDismissBoxValue.StartToEnd -> if (movie.isWatched) Quad(
+                                        MaterialTheme.colorScheme.secondaryContainer,
+                                        Icons.Default.Close,
+                                        "No vista",
+                                        Alignment.CenterStart
+                                    ) else Quad(
+                                        MaterialTheme.colorScheme.tertiaryContainer,
+                                        Icons.Default.Check,
+                                        "Vista",
+                                        Alignment.CenterStart
+                                    )
+                                    else -> Quad(Color.Transparent, null, "", Alignment.Center)
                                 }
-                                val icon = when (swipeState.dismissDirection) {
-                                    SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete
-                                    SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Check
-                                    else -> null
-                                }
-                                val text = when (swipeState.dismissDirection) {
-                                    SwipeToDismissBoxValue.EndToStart -> "Eliminar"
-                                    SwipeToDismissBoxValue.StartToEnd -> if (movie.isWatched) "No vista" else "Vista"
-                                    else -> ""
-                                }
-                                val alignment = when (swipeState.dismissDirection) {
-                                    SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
-                                    SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-                                    else -> Alignment.Center
-                                }
-                                
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(color, RoundedCornerShape(12.dp))
-                                        .padding(horizontal = 20.dp),
-                                    contentAlignment = alignment
+                                        .background(bgColor, RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 24.dp),
+                                    contentAlignment = align
                                 ) {
                                     if (icon != null) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = icon,
-                                                contentDescription = text,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(24.dp)
-                                            )
-                                            Text(
-                                                text = text,
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold,
-                                                textAlign = TextAlign.Center
-                                            )
+                                            Icon(icon, label, tint = MaterialTheme.colorScheme.onSurface)
+                                            Text(label, fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface)
                                         }
                                     }
                                 }
                             }
                         ) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { 
-                                        movie.url?.let { url -> openUrl(url) } 
-                                    },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (movie.isWatched) Color(0xFF1A3A1A) else Color(0xFF2A2A2A)
-                                ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                            ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (editingMovieId == movie.id) {
-                                        BasicTextField(
-                                            value = tempTitle,
-                                            onValueChange = { tempTitle = it },
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .background(
-                                                    Color(0xFF3A3A3A),
-                                                    RoundedCornerShape(4.dp)
-                                                )
-                                                .padding(8.dp),
-                                            textStyle = TextStyle(
-                                                color = Color.White,
-                                                fontSize = MaterialTheme.typography.titleMedium.fontSize,
-                                                fontWeight = FontWeight.SemiBold
-                                            ),
-                                            cursorBrush = SolidColor(Color.White),
-                                            singleLine = true
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        IconButton(
-                                            onClick = {
-                                                if (tempTitle.isNotBlank()) {
-                                                    updateMovieTitle(movie.id, tempTitle)
-                                                    editingMovieId = null
-                                                }
-                                            }
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Check,
-                                                contentDescription = "Guardar",
-                                                tint = Color(0xFF4F8EF7)
-                                            )
+                            MovieCard(
+                                movie = movie,
+                                isEditing = editingId == movie.id,
+                                editTitleValue = editTitle,
+                                onEditTitleChange = { editTitle = it },
+                                onStartEdit = { editingId = movie.id; editTitle = movie.title },
+                                onSaveEdit = {
+                                    if (editTitle.isNotBlank()) {
+                                        scope.launch {
+                                            db.movieDao().update(movie.copy(title = editTitle))
                                         }
-                                    } else {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            if (movie.isWatched) {
-                                                Text(
-                                                    text = "✅ ",
-                                                    style = MaterialTheme.typography.titleMedium
-                                                )
-                                            }
-                                            Text(
-                                                text = movie.title,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = if (movie.isWatched) Color(0xFF90EE90) else Color.White
-                                            )
-                                        }
-                                        
-                                        Row {
-                                            IconButton(
-                                                onClick = {
-                                                    editingMovieId = movie.id
-                                                    tempTitle = movie.title
-                                                }
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Edit,
-                                                    contentDescription = "Editar título",
-                                                    tint = Color.Gray
-                                                )
-                                            }
-                                            
-                                            Box {
-                                                IconButton(
-                                                    onClick = { showMenu = true }
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.MoreVert,
-                                                        contentDescription = "Opciones",
-                                                        tint = Color.Gray
-                                                    )
-                                                }
-                                                
-                                                DropdownMenu(
-                                                    expanded = showMenu,
-                                                    onDismissRequest = { showMenu = false }
-                                                ) {
-                                                    DropdownMenuItem(
-                                                        text = {
-                                                            Row(
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Icon(
-                                                                    imageVector = Icons.Default.Check,
-                                                                    contentDescription = null,
-                                                                    tint = if (movie.isWatched) Color.Green else Color.Gray
-                                                                )
-                                                                Spacer(modifier = Modifier.width(8.dp))
-                                                                Text(
-                                                                    if (movie.isWatched) "Marcar como no vista" else "Marcar como vista"
-                                                                )
-                                                            }
-                                                        },
-                                                        onClick = {
-                                                            toggleWatched(movie)
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = {
-                                                            Row(
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Icon(
-                                                                    imageVector = Icons.Default.Delete,
-                                                                    contentDescription = null,
-                                                                    tint = Color.Red
-                                                                )
-                                                                Spacer(modifier = Modifier.width(8.dp))
-                                                                Text("Eliminar")
-                                                            }
-                                                        },
-                                                        onClick = {
-                                                            deleteMovie(movie)
-                                                            showMenu = false
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
+                                        editingId = null
                                     }
-                                }
-                                
-                                movie.url?.let { url ->
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = url,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF4F8EF7),
-                                        modifier = Modifier.clickable { openUrl(url) }
-                                    )
-                                }
-                                
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Agregada ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(movie.addedAt))}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
-                                    if (movie.url != null && !movie.isWatched) {
-                                        Text(
-                                            text = "👆 Toca para abrir",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color(0xFF4F8EF7)
-                                        )
-                                    } else if (movie.isWatched) {
-                                        Text(
-                                            text = "🍿 Vista",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color(0xFF90EE90)
-                                        )
+                                },
+                                onCancelEdit = { editingId = null },
+                                onToggleWatched = {
+                                    scope.launch {
+                                        db.movieDao().update(movie.copy(isWatched = !movie.isWatched))
                                     }
-                                }
-                            }
-                        }
+                                },
+                                onOpenUrl = { movie.url?.let { openUrl(it) } }
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MovieCard(
+    movie: Movie,
+    isEditing: Boolean,
+    editTitleValue: String,
+    onEditTitleChange: (String) -> Unit,
+    onStartEdit: () -> Unit,
+    onSaveEdit: () -> Unit,
+    onCancelEdit: () -> Unit,
+    onToggleWatched: () -> Unit,
+    onOpenUrl: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !isEditing && movie.url != null) { onOpenUrl() },
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (movie.isWatched)
+                MaterialTheme.colorScheme.surfaceVariant
+            else
+                MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(
+            defaultElevation = if (movie.isWatched) 1.dp else 3.dp
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Status badge
+                Surface(
+                    shape = CircleShape,
+                    color = if (movie.isWatched)
+                        MaterialTheme.colorScheme.tertiaryContainer
+                    else
+                        MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (movie.isWatched) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Vista",
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        } else {
+                            Text("🎬", fontSize = 16.sp)
+                        }
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    if (isEditing) {
+                        OutlinedTextField(
+                            value = editTitleValue,
+                            onValueChange = onEditTitleChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Título") },
+                            textStyle = MaterialTheme.typography.bodyLarge
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = onCancelEdit) { Text("Cancelar") }
+                            TextButton(onClick = onSaveEdit) { Text("Guardar") }
+                        }
+                    } else {
+                        Text(
+                            text = movie.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (movie.isWatched)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        movie.url?.let { url ->
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = url,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { onOpenUrl() }
+                            )
+                        }
+                    }
+                }
+
+                if (!isEditing) {
+                    IconButton(onClick = onStartEdit, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Default.Edit,
+                            "Editar",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (!isEditing) {
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+                            .format(Date(movie.addedAt)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    AssistChip(
+                        onClick = onToggleWatched,
+                        label = {
+                            Text(
+                                if (movie.isWatched) "No vista" else "Marcar vista",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (movie.isWatched) Icons.Default.Refresh else Icons.Default.Check,
+                                null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(filter: MovieFilter, modifier: Modifier = Modifier) {
+    val (emoji, title, subtitle) = when (filter) {
+        MovieFilter.ALL -> Triple(
+            "🎬",
+            "No hay nada guardado",
+            "Comparte un enlace desde Instagram, YouTube u otra app y aparecerá aquí"
+        )
+        MovieFilter.UNWATCHED -> Triple(
+            "✅",
+            "¡Todo visto!",
+            "No tienes películas pendientes por ver"
+        )
+        MovieFilter.WATCHED -> Triple(
+            "🍿",
+            "Nada marcado como visto",
+            "Desliza a la derecha una película para marcarla como vista"
+        )
+    }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Text(emoji, style = MaterialTheme.typography.displayLarge)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
