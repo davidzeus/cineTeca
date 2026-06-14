@@ -58,6 +58,12 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
 
+    // Google Sign-In + Drive
+    implementation(libs.play.services.auth)
+
+    // Material Icons Extended
+    implementation(libs.compose.material.icons.extended)
+
     // Jetpack Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
