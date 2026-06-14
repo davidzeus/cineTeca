@@ -1,14 +1,11 @@
 package com.example.cineteca
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -37,86 +34,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
-import com.example.cineteca.auth.GoogleDriveManager
 import com.example.cineteca.data.AppDatabase
 import com.example.cineteca.data.Movie
-import com.example.cineteca.ui.LoginScreen
 import com.example.cineteca.ui.theme.CineTecaTheme
-import com.google.android.gms.auth.api.signin.GoogleSignIn
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : ComponentActivity() {
-
-    private lateinit var driveManager: GoogleDriveManager
-    private lateinit var signInLauncher: ActivityResultLauncher<Intent>
-
-    // null = show login, true = signed in with Google, false = local only
-    private val authState = mutableStateOf<Boolean?>(null)
-
-    private val prefs by lazy { getSharedPreferences("cineteca_prefs", Context.MODE_PRIVATE) }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        driveManager = GoogleDriveManager(this)
-
-        authState.value = when {
-            driveManager.isSignedIn() -> true
-            prefs.getBoolean("skip_login", false) -> false
-            else -> null
-        }
-
-        signInLauncher = registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            try {
-                GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                    .getResult(com.google.android.gms.common.api.ApiException::class.java)
-                authState.value = true
-            } catch (e: Exception) {
-                Toast.makeText(this, "Error al iniciar sesión con Google", Toast.LENGTH_LONG).show()
-            }
-        }
-
         setContent {
             CineTecaTheme {
-                val auth by authState
-                var isSigningIn by remember { mutableStateOf(false) }
-
-                when (auth) {
-                    null -> LoginScreen(
-                        isLoading = isSigningIn,
-                        onSignIn = {
-                            isSigningIn = true
-                            signInLauncher.launch(driveManager.getSignInIntent())
-                        },
-                        onContinueLocal = {
-                            prefs.edit().putBoolean("skip_login", true).apply()
-                            authState.value = false
-                        }
-                    )
-                    else -> MovieListScreen(
-                        isGoogleConnected = auth == true,
-                        driveManager = if (auth == true) driveManager else null,
-                        onSignOut = {
-                            lifecycleScope.launch {
-                                driveManager.signOut()
-                                prefs.edit().putBoolean("skip_login", false).apply()
-                                authState.value = null
-                            }
-                        },
-                        onConnectGoogle = {
-                            signInLauncher.launch(driveManager.getSignInIntent())
-                        }
-                    )
-                }
-
-                LaunchedEffect(auth) {
-                    if (auth != null) isSigningIn = false
-                }
+                MovieListScreen()
             }
         }
     }
@@ -126,24 +57,15 @@ enum class MovieFilter { ALL, UNWATCHED, WATCHED }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieListScreen(
-    isGoogleConnected: Boolean,
-    driveManager: GoogleDriveManager?,
-    onSignOut: () -> Unit,
-    onConnectGoogle: () -> Unit
-) {
+fun MovieListScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
 
     var movies by remember { mutableStateOf(listOf<Movie>()) }
     var activeFilter by remember { mutableStateOf(MovieFilter.ALL) }
-    var showMenu by remember { mutableStateOf(false) }
-    var isBusy by remember { mutableStateOf(false) }
     var editingId by remember { mutableStateOf<Int?>(null) }
     var editTitle by remember { mutableStateOf("") }
-
-    val account = driveManager?.getCurrentAccount()
 
     LaunchedEffect(Unit) {
         db.movieDao().getAllMovies().collectLatest { movies = it }
@@ -170,112 +92,11 @@ fun MovieListScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            "CineTeca",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (account != null) {
-                            Text(
-                                account.email ?: "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    AnimatedVisibility(visible = isBusy, enter = fadeIn(), exit = fadeOut()) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .padding(8.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Box {
-                        if (account != null) {
-                            val initial = (account.displayName ?: account.email ?: "U")
-                                .take(1).uppercase()
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer)
-                                    .clickable { showMenu = true },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    initial,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                            }
-                        } else {
-                            IconButton(onClick = { showMenu = true }) {
-                                Icon(Icons.Default.MoreVert, "Opciones")
-                            }
-                        }
-
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
-                        ) {
-                            if (isGoogleConnected && driveManager != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Guardar en Drive") },
-                                    leadingIcon = { Icon(Icons.Default.CloudUpload, null) },
-                                    onClick = {
-                                        showMenu = false
-                                        isBusy = true
-                                        scope.launch {
-                                            val r = driveManager.backupToDrive(movies)
-                                            isBusy = false
-                                            Toast.makeText(
-                                                context,
-                                                if (r.isSuccess) "✓ Backup guardado en Drive"
-                                                else "Error: ${r.exceptionOrNull()?.message}",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Restaurar desde Drive") },
-                                    leadingIcon = { Icon(Icons.Default.CloudDownload, null) },
-                                    onClick = {
-                                        showMenu = false
-                                        isBusy = true
-                                        scope.launch {
-                                            val r = driveManager.restoreFromDrive()
-                                            isBusy = false
-                                            if (r.isSuccess) {
-                                                r.getOrNull()?.forEach { db.movieDao().insert(it) }
-                                                Toast.makeText(context, "✓ Lista restaurada desde Drive", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(context, "Error: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                    }
-                                )
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text("Cerrar sesión") },
-                                    leadingIcon = { Icon(Icons.Default.ExitToApp, null) },
-                                    onClick = { showMenu = false; onSignOut() }
-                                )
-                            } else {
-                                DropdownMenuItem(
-                                    text = { Text("Conectar con Google Drive") },
-                                    leadingIcon = { Icon(Icons.Default.AccountCircle, null) },
-                                    onClick = { showMenu = false; onConnectGoogle() }
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        "CineTeca",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -289,7 +110,6 @@ fun MovieListScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Filter chips
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -379,8 +199,11 @@ fun MovieListScreen(
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                             Icon(icon, label, tint = MaterialTheme.colorScheme.onSurface)
-                                            Text(label, fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface)
+                                            Text(
+                                                label,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
                                         }
                                     }
                                 }
@@ -452,7 +275,6 @@ private fun MovieCard(
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Status badge
                 Surface(
                     shape = CircleShape,
                     color = if (movie.isWatched)
@@ -504,7 +326,6 @@ private fun MovieCard(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-
                         movie.url?.let { url ->
                             Spacer(Modifier.height(4.dp))
                             Text(
